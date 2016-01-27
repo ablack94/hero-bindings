@@ -21,6 +21,7 @@ import skadistats.clarity.source.MappedFileSource;
 import skadistats.clarity.source.Source;
 import vconsole2.ConsolePacket;
 import vconsole2.VConsole2;
+import vconsole2.VConsoleListener;
 import dota2.GameInfo;
 import dota2.GameInfoSource;
 import dota2.Hero;
@@ -28,7 +29,7 @@ import dota2.Player;
 import dota2.Team;
 
 @UsesEntities
-public class DemoGameInfoSource extends GameInfoSource {
+public class DemoGameInfoSource extends GameInfoSource implements VConsoleListener {
 	private static final String DEMO_NAME = "HB_DEMO";
 	private VConsole2 console;
 	private String replay_dir;
@@ -37,10 +38,21 @@ public class DemoGameInfoSource extends GameInfoSource {
 		super();
 		this.console = console;
 		this.replay_dir = replay_dir;
+		
+		//this.console.addListener(this);
 	}
 	
 	@Override
 	public void updateGameInfo() {
+		// Delete the replay file if it exists
+		File replay_file = new File(replay_dir, DEMO_NAME + ".dem");
+		replay_file.delete();
+		try {
+			Thread.sleep(2000);
+		} catch (InterruptedException e1) {
+			// TODO Auto-generated catch block
+			e1.printStackTrace();
+		}
 		// Write the 'record' command
 		try {
 			this.console.send(ConsolePacket.buildCommand("record " + DEMO_NAME));
@@ -59,13 +71,21 @@ public class DemoGameInfoSource extends GameInfoSource {
 		} catch (IOException e) {
 			e.printStackTrace();
 		}
-		// Read the replay file
-		File replay_file = new File(replay_dir, DEMO_NAME + ".dem");
+
+		try {
+			Thread.sleep(1000);
+		} catch (InterruptedException e1) {
+			// TODO Auto-generated catch block
+			e1.printStackTrace();
+		}
+		
 		// Replay parsing code, should probably put this somewhere else
 		try {
+			System.out.println("Opening...");
 			Source src = new MappedFileSource(replay_file.getAbsolutePath());
 			SimpleRunner r = new SimpleRunner(src);
 			r.runWith(this);
+			//src.close();
 			
 			// Get player resource entity
 			Entity pr = getEntity(r, "CDOTA_PlayerResource");
@@ -88,7 +108,9 @@ public class DemoGameInfoSource extends GameInfoSource {
 			}
 			
 			gi.setPlayers(dota_players);
+			System.out.println("...sending gi");
 			super.ref.updateGameInfo(gi);
+			src.close();
 		} catch (IOException e) {
 			e.printStackTrace();
 		} finally {
@@ -111,5 +133,10 @@ public class DemoGameInfoSource extends GameInfoSource {
     	}
     	return entities;
     }
+
+	@Override
+	public void onPacketReceived(ConsolePacket packet) {
+		
+	}
 	
 }

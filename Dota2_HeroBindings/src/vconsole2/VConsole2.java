@@ -84,6 +84,9 @@ public class VConsole2 {
 		write_queue.add(packet);
 	}
 	
+	private void _acquireOutputStream() throws InterruptedException {
+		
+	}
 	
 	private void run_write() {
 		ConsolePacket p = null;
