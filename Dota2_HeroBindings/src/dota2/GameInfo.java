@@ -12,12 +12,18 @@ import java.util.List;
 
 public class GameInfo {
 	
+	private PlayerInfo this_player;
+	
+	public PlayerInfo getCurrentPlayer() { return this_player; }
+	public void setCurrentPlayer(PlayerInfo player) { this_player = player; }
+	
 	private List<Player> players;
 	
 	public List<Player> getPlayers() { return players; }
 	public void setPlayers(List<Player> players) { this.players = players; }
 	
 	public GameInfo() {
+		this.this_player = null;
 		this.players = null;
 	}
 	

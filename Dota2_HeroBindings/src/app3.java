@@ -26,25 +26,32 @@ public class app3 implements GameListener {
 	Map<Hero, String> hero_config_map;
 	String default_config = "HB_default.cfg";
 	
-	public app3(long steam_id) throws UnknownHostException, IOException {
+	public app3(long steam_id) throws Exception {
 		System.out.println("Monitoring player with steamID: " + steam_id);
-		// Create a mapping of config files to heros
+		// Create default config files if none exist
 		hero_config_map = new HashMap<Hero, String>();
 		hero_config_map.put(Hero.Queenofpain, "HB_qop.cfg");
-		
 		
 		this_steam_id = steam_id;
 		prev_this_player = Player.fromSteamID(steam_id);
 		cur_this_player = Player.fromSteamID(steam_id);
 		
 		console = new VConsole2();
+		while(true) {
+			try {
+				console.connect();
+			} catch(IOException e) {
+				System.out.println("Connection failed...");
+				Thread.sleep(5000);
+				continue;
+			}
+			break;
+		}
 		
 		VConsoleGameStateSource gs_src = new VConsoleGameStateSource(console);
-		gi_src = new DemoGameInfoSource(console, "D:\\SteamLibrary\\steamapps\\common\\dota 2 beta\\game\\dota");
+		gi_src = new DemoGameInfoSource(console, ".");
 		Game game = new Game(gs_src, gi_src);
 		game.addGameListener(this);
-		
-		console.start();
 		
 		while(true);
 	}
@@ -54,6 +61,7 @@ public class app3 implements GameListener {
 		String _prev = (prev != null) ? prev.toString() : "None";
 		String _cur = (cur != null) ? cur.toString() : "None";
 		System.out.println("State change: " + _prev + " -> " + _cur);
+		
 		if(cur == GameState.PRE_GAME || cur == GameState.GAME_IN_PROGRESS) {
 			System.out.println("Updating game info...");
 			new Thread(new Runnable() {
@@ -66,7 +74,9 @@ public class app3 implements GameListener {
 	
 	@Override
 	public void onInfoChange(GameInfo prev, GameInfo cur) {
+		System.out.println("NEW INFO MAIN " + cur);
 		for(Player p : cur.getPlayers()) {
+			System.out.println("\t\t" + p.getSteamID() + " == " + this_steam_id);
 			if(p.getSteamID() == this_steam_id) {
 				prev_this_player = cur_this_player;
 				cur_this_player = p;
@@ -83,8 +93,8 @@ public class app3 implements GameListener {
 	
 	private void loadConfig(String config) {
 		try {
-			console.send(ConsolePacket.buildCommand("exec " + config));
-		} catch (IOException e) {
+			console.send(ConsolePacket.buildCommand("exec " + config)).waitOn();
+		} catch (IllegalStateException | InterruptedException e) {
 			// TODO Auto-generated catch block
 			e.printStackTrace();
 		}

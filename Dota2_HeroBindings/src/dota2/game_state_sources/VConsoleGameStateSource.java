@@ -35,11 +35,12 @@ public class VConsoleGameStateSource extends GameStateSource implements VConsole
 		
 		// When we first start, we sent the 'status' command to the console, which will print the current game state if we're in a game
 		try {
-			this.console.send(ConsolePacket.buildCommand("status"));
-		} catch (IOException e) {
+			this.console.send(ConsolePacket.buildCommand("status")).waitOn();
+		} catch (IllegalStateException | InterruptedException e) {
 			// TODO Auto-generated catch block
 			e.printStackTrace();
 		}
+
 	}
 
 	@Override
@@ -61,8 +62,10 @@ public class VConsoleGameStateSource extends GameStateSource implements VConsole
 				log.log(Level.WARNING, "Game state '" + m.group(2) + "' was matched, but is not recognized. This is probably a bug, report it or check the regex being used!\nRaw data: " + data, e);
 			}
 			if(gs != null) {
-				log.log(Level.FINE, "Detected gamestate transition '" + gs.toString() + "'");
-				super.ref.updateState(gs);
+				if(super.ref.getState() != gs) {
+					log.log(Level.FINE, "Detected gamestate transition '" + gs.toString() + "'");
+					super.ref.updateState(gs);
+				}
 			}
 		}
 	}

@@ -66,6 +66,7 @@ public class Game {
 	
 	public void updateGameInfo(GameInfo new_info) {
 		GameInfo prev = this.info;
+		System.out.println("New info! --");
 		this.info = new_info;
 		notifyGameListeners_onInfoChange(prev, new_info);
 	}

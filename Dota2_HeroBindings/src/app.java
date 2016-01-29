@@ -53,6 +53,7 @@ public class app {
 	ControllableRunner runner;
 	
 	public app(String[] argv) throws Exception {
+		System.out.println(argv[0]);
 		Source src = new MappedFileSource(argv[0]);
 		runner = new ControllableRunner(src).runWith(this);
 		runner.seek(runner.getLastTick());
@@ -60,10 +61,11 @@ public class app {
 		
 		// Get player resource entity
 		Entity pr = getEntity("CDOTA_PlayerResource");
-		assert(pr != null);
+		System.out.println(pr);
+		//assert(pr != null);
 		// Get player objects
 		List<Entity> players = getEntities("CDOTAPlayer");
-		assert(players.size() > 0);
+		//assert(players.size() > 0);
 		
 		Map<Integer,DotaPlayer> playerObjects = new HashMap<Integer,DotaPlayer>();
 		for(Entity e : players) {

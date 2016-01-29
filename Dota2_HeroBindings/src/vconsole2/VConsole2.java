@@ -9,20 +9,137 @@ import java.net.UnknownHostException;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.Semaphore;
 import java.util.concurrent.locks.ReentrantLock;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 
 public class VConsole2 {
+	private static Logger log = Logger.getLogger(VConsole2.class.getName());
+	
+	private interface State {
+		public void connect() throws IllegalStateException, IOException;
+		public void disconnect() throws IllegalStateException, IOException;
+		public ConsolePacket next() throws IllegalStateException, InterruptedException;
+		public SendResult send(ConsolePacket packet) throws IllegalStateException;
+	}
+	
+	private class DisconnectedState implements State {
+		public void connect() throws IllegalStateException, IOException {
+			log.fine("Connecting");
+			try {
+				conn = new Socket(InetAddress.getLocalHost(), port);
+				_input = conn.getInputStream();
+				_output = conn.getOutputStream();
+				thread_read = new Thread(new Runnable() {
+					public void run() {
+						run_read();
+					}
+				});
+				thread_write = new Thread(new Runnable() {
+					public void run() {
+						run_write();
+					}
+				});
+				thread_read.start();
+				thread_write.start();
+				setState(new ConnectedState());
+			} catch(IOException e) {
+				if(conn != null) {
+					try {
+						conn.close();
+					} catch(Exception e2) { }
+					try {
+						_input.close();
+					} catch(Exception e2) { }
+					try {
+						_output.close();
+					} catch(Exception e2) { }
+					conn = null;
+					_input = null;
+					_output = null;
+					thread_read = null;
+					thread_write = null;
+				}
+			}
+		}
+		public void disconnect() throws IllegalStateException, IOException {
+			throw new IllegalStateException("Already disconnected.");
+		}
+		public ConsolePacket next() {
+			throw new IllegalStateException("No connection, can't read.");
+		}
+		public SendResult send(ConsolePacket packet) {
+			throw new IllegalStateException("No connection, can't send.");
+		}		
+	}
+	
+	private class ConnectedState implements State {
+		public void connect() throws IllegalStateException, IOException {
+			throw new IllegalStateException("Already connected.");
+		}
+		public void disconnect() throws IllegalStateException, IOException {
+			log.fine("Disconnecting");
+			try {
+				conn.close();
+			} catch(IOException e) {
+				log.log(Level.WARNING, "Problem closing socket.", e);
+			} finally {
+				conn = null;
+				_input = null;
+				_output = null;
+			}
+			thread_read.interrupt();
+			thread_write.interrupt();
+			try {
+				if(Thread.currentThread() != thread_read && Thread.currentThread() != thread_write) {
+					Thread.sleep(5000);
+					if(thread_read.isAlive()) {
+						log.warning("Read thread didn't terminate in an appropriate amount of time. Most likely a bug, could have performance immplications.");
+					}
+					if(thread_write.isAlive()) {
+						log.warning("Write thread didn't terminate in an appropriate amount of time. Most likely a bug, could have performance implications.");
+					}
+				}
+			} catch (InterruptedException e) {
+				log.warning("Interrupted while disconnecting, thread state not guaranteed.");
+			} finally {
+				conn = null;
+				thread_read = null;
+				thread_write = null;
+				read_queue.clear();
+				write_queue.clear();
+				setState(new DisconnectedState());
+			}
+		}
+		public ConsolePacket next() throws InterruptedException {
+			return read_queue.take();
+		}
+		public SendResult send(ConsolePacket packet) {
+			PacketToWrite ptw = new PacketToWrite(packet);
+			write_queue.add(ptw);
+			return ptw.getResult();
+		}		
+	}
+	
 	public static final int DEFAULT_PORT = 29000;
 	
 	/* Members */
+	private State state;
+	private ReentrantLock state_lock;
+	private int timeout; // ms
 	private int port;
 	private Socket conn;
 	private Thread thread_read;
 	private Thread thread_write;
 	private ReentrantLock write_lock;
 	
+	private InputStream _input;
+	private OutputStream _output;
+	
 	private LinkedBlockingQueue<VConsoleListener> listeners;
-	private LinkedBlockingQueue<ConsolePacket> write_queue;
+	private LinkedBlockingQueue<ConsolePacket> read_queue;
+	private LinkedBlockingQueue<PacketToWrite> write_queue;
 	
 	/* Accessors/Mutators */
 	
@@ -32,25 +149,53 @@ public class VConsole2 {
 	}
 	
 	public VConsole2(int port) {
+		this.state = new DisconnectedState();
+		this.state_lock = new ReentrantLock();
+		
+		this.timeout = 2000;
 		this.port = port;
 		this.conn = null;
 		this.thread_read = null;
 		this.thread_write = null;
 		this.listeners = new LinkedBlockingQueue<VConsoleListener>();
-		this.write_queue = new LinkedBlockingQueue<ConsolePacket>();
+		this.read_queue = new LinkedBlockingQueue<ConsolePacket>();
+		this.write_queue = new LinkedBlockingQueue<PacketToWrite>();
 		this.write_lock = new ReentrantLock();
+		
+		this._input = null;
+		this._output = null;
 	}
 	
-	private void notifyListeners(ConsolePacket packet) {
+	protected void listenersOnPacketReceived(ConsolePacket packet) {
 		for(VConsoleListener listener : this.listeners) {
 			try {
 				listener.onPacketReceived(packet);
 			} catch(Exception e) {
-				e.printStackTrace();
+				log.log(Level.WARNING, "Error in onPacketReceived listener!", e);
 			}
 		}
 	}
 	
+	protected void listenersOnConnected() {
+		for(VConsoleListener listener : this.listeners) {
+			try {
+				listener.onConnected();
+			} catch(Exception e) {
+				log.log(Level.WARNING, "Error in onConnected listener!", e);
+			}
+		}
+	}
+	
+	protected void listenersOnDisconnect() {
+		for(VConsoleListener listener : this.listeners) {
+			try {
+				listener.onDisconnect();
+			} catch(Exception e) {
+				log.log(Level.WARNING, "Error in onDisconnected listener!", e);
+			}
+		}
+	}
+		
 	public void addListener(VConsoleListener listener) {
 		this.listeners.add(listener);
 	}
@@ -58,126 +203,88 @@ public class VConsole2 {
 	public void removeListener(VConsoleListener listener) {
 		while(this.listeners.remove(listener)); // remove all instances of 'listener'
 	}
-	
-	public void start() throws UnknownHostException, IOException {
-		this.thread_read = new Thread(new Runnable() {
-			@Override
-			public void run() {
-				run_read();
-			}
-		});
-		this.thread_write = new Thread(new Runnable() {
-			@Override
-			public void run() {
-				run_write();
-			}
-		});
-		this.thread_read.start();
-		this.thread_write.start();
-	}
-	
-	public void stop() {
+		
+	public void connect() throws IllegalStateException, IOException {
+		this.state_lock.lock();
+		try {
+			this.state.connect();
+			listenersOnConnected();
+		} finally {
+			this.state_lock.unlock();
+		}
 		
 	}
-	
-	public void send(ConsolePacket packet) throws IOException {
-		write_queue.add(packet);
+	public void disconnect() throws IllegalStateException, IOException {
+		this.state_lock.lock();
+		try {
+			this.state.disconnect();
+			listenersOnDisconnect();
+		} finally {
+			this.state_lock.unlock();
+		}
+	}
+	public ConsolePacket next() throws IllegalStateException, InterruptedException {
+		this.state_lock.lock();
+		try {
+			return this.state.next();
+		} finally {
+			this.state_lock.unlock();
+		}
+	}
+	public SendResult send(ConsolePacket packet) throws IllegalStateException {
+		this.state_lock.lock();
+		try {
+			return this.state.send(packet);
+		} finally {
+			this.state_lock.unlock();
+		}
 	}
 	
-	private void _acquireOutputStream() throws InterruptedException {
-		
+	protected void setState(State s) {
+		this.state_lock.lock();
+		try {
+			this.state = s;
+		} finally {
+			this.state_lock.unlock();
+		}
 	}
 	
 	private void run_write() {
-		ConsolePacket p = null;
-		OutputStream os = null;
+		PacketToWrite temp = null;
 		while(Thread.interrupted() == false) {
-			// Get a packet to send
-			if(p == null) {
-				try {
-					p = write_queue.take();
-				} catch(InterruptedException e) {
-					return;
+			try {
+				temp = write_queue.take();
+				_output.write(temp.getPacket().serialize());
+				_output.flush();
+				temp.getResult().complete();
+			} catch(InterruptedException e) {
+				break;
+			} catch(IOException e) {
+				if(temp != null) {
+					temp.getResult().setSuccess(false);
 				}
-			}
-			// Send/retry the current packet
-			if(os == null) {
-				if(this.conn != null) {
-					try {
-						os = this.conn.getOutputStream();
-					} catch(IOException e) {
-						e.printStackTrace();
-						try {
-							Thread.sleep(1000);
-						} catch (InterruptedException e1) {
-							return;
-						}
-					}
-				}
-			} else {
-				try {
-					System.out.println("Writing packet: " + new String(p.serialize(), StandardCharsets.UTF_8));
-					os.write(p.serialize());
-					byte[] _b = p.serialize();
-					int[] _i = new int[_b.length];
-					for(int i=0;i<_i.length;i++) {
-						_i[i] = (int)(_b[i] & 0xff);
-					}
-					System.out.println(Arrays.toString(_i));
-					os.flush();
-					p = null;
-				} catch(IOException e) {
-					e.printStackTrace();
-					os = null;
-				}
+			} finally {
+				temp = null;
 			}
 		}
+		
+		try {
+			disconnect();
+		} catch(Exception e) {
+			// Don't need to do anything, don't care really
+		}
+		log.log(Level.FINEST, "Write thread terminated.");
 	}
 	
 	private void run_read() {
-		while(this.conn == null) {
-			try {
-				this.conn = new Socket(InetAddress.getLocalHost(), this.port);
-			} catch(Exception e) {
-				try {
-					Thread.sleep(1000);
-				} catch (InterruptedException e1) {
-					return;
-				}
-			}
-		}
-		System.out.println("Connected");
-		/*
-		try {
-			this.send(ConsolePacket.buildCommand("clear"));
-		} catch (IOException e1) {
-			// TODO Auto-generated catch block
-			e1.printStackTrace();
-		}
-		try {
-			Thread.sleep(1000);
-		} catch (InterruptedException e1) {
-			// TODO Auto-generated catch block
-			e1.printStackTrace();
-		}
-		*/
-		
-		InputStream is = null;
-		try {
-			is = conn.getInputStream();
-		} catch(IOException e) {
-			System.err.println("Error opening socket input stream.");
-			return;
-		}
 		byte[] header_buf = new byte[12];
 		int count;
 		byte[] payload_buf;
 		while(Thread.interrupted() == false) {
 			try {
-				for(int i=0;i<12;i+=is.read(header_buf));
+				for(int i=0;i<12;i+=_input.read(header_buf));
 			} catch (IOException e) {
-				System.err.println("Error reading header from socket.");
-				e.printStackTrace();
+				log.log(Level.WARNING, "Error reading header!", e);
 				break;
 			}
 			// Parse the header
@@ -189,16 +296,34 @@ public class VConsole2 {
 			// read payload
 			payload_buf = new byte[payload_length];
 			try {
-				for(int i=0;i<payload_length;i+=is.read(payload_buf));
+				for(int i=0;i<payload_length;i+=_input.read(payload_buf));
 			} catch(IOException e) {
-				System.err.println("Error reading payload from socket.");
-				e.printStackTrace();
+				log.log(Level.WARNING, "Error reading payload!", e);
 				break;
 			}
 			// Build packet
 			ConsolePacket p = new ConsolePacket(command, payload_buf);
 			// Notify listeners
-			notifyListeners(p);
+			listenersOnPacketReceived(p);
+		}
+		
+		try {
+			disconnect();
+		} catch(Exception e) {
+			// Don't need to do anything, don't care really
+		}
+		log.log(Level.FINEST, "Read thread terminated.");
+	}
+	
+	private class PacketToWrite {
+		private SendResult result;
+		private ConsolePacket packet;
+		public SendResult getResult() { return result; }
+		public ConsolePacket getPacket() { return packet; }
+		
+		public PacketToWrite(ConsolePacket packet) {
+			this.result = new SendResult(packet);
+			this.packet = packet;
 		}
 	}
 	
