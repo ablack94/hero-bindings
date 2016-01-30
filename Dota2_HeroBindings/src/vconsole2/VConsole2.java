@@ -18,14 +18,14 @@ public class VConsole2 {
 	private static Logger log = Logger.getLogger(VConsole2.class.getName());
 	
 	private interface State {
-		public void connect() throws IllegalStateException, IOException;
+		public boolean connect() throws IllegalStateException;
 		public void disconnect() throws IllegalStateException, IOException;
 		public ConsolePacket next() throws IllegalStateException, InterruptedException;
 		public SendResult send(ConsolePacket packet) throws IllegalStateException;
 	}
 	
 	private class DisconnectedState implements State {
-		public void connect() throws IllegalStateException, IOException {
+		public boolean connect() throws IllegalStateException {
 			log.fine("Connecting");
 			try {
 				conn = new Socket(InetAddress.getLocalHost(), port);
@@ -61,7 +61,9 @@ public class VConsole2 {
 					thread_read = null;
 					thread_write = null;
 				}
+				return false;
 			}
+			return true;
 		}
 		public void disconnect() throws IllegalStateException, IOException {
 			throw new IllegalStateException("Already disconnected.");
@@ -75,7 +77,7 @@ public class VConsole2 {
 	}
 	
 	private class ConnectedState implements State {
-		public void connect() throws IllegalStateException, IOException {
+		public boolean connect() throws IllegalStateException {
 			throw new IllegalStateException("Already connected.");
 		}
 		public void disconnect() throws IllegalStateException, IOException {
@@ -204,14 +206,16 @@ public class VConsole2 {
 		while(this.listeners.remove(listener)); // remove all instances of 'listener'
 	}
 		
-	public void connect() throws IllegalStateException, IOException {
+	public boolean connect() throws IllegalStateException {
+		boolean result;
 		this.state_lock.lock();
 		try {
-			this.state.connect();
+			result = this.state.connect();
 			listenersOnConnected();
 		} finally {
 			this.state_lock.unlock();
 		}
+		return result;
 		
 	}
 	public void disconnect() throws IllegalStateException, IOException {
@@ -277,14 +281,23 @@ public class VConsole2 {
 	}
 	
 	private void run_read() {
+		boolean closing = false;
 		byte[] header_buf = new byte[12];
 		int count;
 		byte[] payload_buf;
-		while(Thread.interrupted() == false) {
+		while(true) {
+			if(Thread.interrupted()) {
+				closing = true;
+				break;
+			}
 			try {
 				for(int i=0;i<12;i+=_input.read(header_buf));
 			} catch (IOException e) {
-				log.log(Level.WARNING, "Error reading header!", e);
+				if(Thread.interrupted() == false) {
+					log.log(Level.WARNING, "Error reading header!", e);
+				} else {
+					closing = true;
+				}
 				break;
 			}
 			// Parse the header
@@ -308,7 +321,9 @@ public class VConsole2 {
 		}
 		
 		try {
-			disconnect();
+			if(closing == false) {
+				disconnect();
+			}
 		} catch(Exception e) {
 			// Don't need to do anything, don't care really
 		}

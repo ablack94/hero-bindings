@@ -11,6 +11,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Vector;
 import java.util.concurrent.Semaphore;
+import java.util.logging.Level;
 import java.util.logging.Logger;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -79,22 +80,21 @@ public class DemoGameInfoSource extends GameInfoSource implements VConsoleListen
 		// Write the 'record' command
 		try {
 			this.record_flag.drainPermits();
-			System.out.println("Sending record command");
-			this.console.send(ConsolePacket.buildCommand("stop")).waitOn();
+			log.log(Level.FINER, "Sending record command");
+			this.console.send(ConsolePacket.buildCommand("stop")).waitOn(); // stop in case another record command is still running for some unknown reasing, stop doesn't hurt anything if nothing is recording
 			this.console.send(ConsolePacket.buildCommand("record " + DEMO_NAME)).waitOn();
-			//Thread.sleep(5000);
+			
 			log.finer("Waiting for record command to process.");
 			this.record_flag.acquire();
 			if(record_started) {
-				System.out.println("Opened demo file, stopping..");
+				log.log(Level.FINER, "Opened demo file, stopping..");
 				this.console.send(ConsolePacket.buildCommand("stop")).waitOn();
 			} else {
-				
-				System.out.println("Error opening demo file, can't update game info.");
+				log.log(Level.FINER, "Error opening demo file, can't update game info.");
 				return;
 			}
 		} catch (InterruptedException e) {
-			e.printStackTrace();
+			log.log(Level.FINER, "Interrupted.", e);
 		}
 		
 		// Get the player's steamid
@@ -110,7 +110,7 @@ public class DemoGameInfoSource extends GameInfoSource implements VConsoleListen
 		// Replay parsing code, should probably put this somewhere else
 		Source src = null;
 		try {
-			System.out.println("Opening...");
+			log.finer("Opening replay...");
 			//src = new MappedFileSource(replay_file.getAbsolutePath());
 			src = new InputStreamSource(new StreamingFileInputStream(replay_file));
 			ControllableRunner r = new ControllableRunner(src).runWith(this);
@@ -120,7 +120,7 @@ public class DemoGameInfoSource extends GameInfoSource implements VConsoleListen
 			/* Build the GameInfo object */
 			GameInfo gi = new GameInfo();
 			
-			System.out.println("Current player has steamid: " + this.steamid);
+			log.finer("Current player has steamid: " + this.steamid);
 			gi.setCurrentPlayer(new PlayerInfo(null, this.steamid, -1));
 			
 			// Get players
@@ -136,19 +136,18 @@ public class DemoGameInfoSource extends GameInfoSource implements VConsoleListen
 					int team_id = e.getProperty("m_iTeamNum");
 					int hero_id = pr.getProperty(String.format("m_vecPlayerTeamData.%04d.m_nSelectedHeroID", pindex)); 
 					long steam_id = pr.getProperty(String.format("m_vecPlayerData.%04d.m_iPlayerSteamID", pindex));
-					System.out.println("\tFound player: " + steam_id);
+					log.finest("\tFound player: " + steam_id);
 					dota_players.add(new Player(steam_id, (hero_id != -1 ? Hero.fromID(hero_id) : null), Team.fromId(team_id)));
 					//playerObjects.put(pindex, new DotaPlayer(steam_id, pindex, hero_id));
 				}
 			}
-			System.out.println(pr);
 				
 			gi.setPlayers(dota_players);
-			System.out.println("...sending gi");
+			log.finer("...sending gi");
 			super.ref.updateGameInfo(gi);
 			src.close();
 		} catch (IOException e) {
-			e.printStackTrace();
+			log.log(Level.WARNING, "Error reading replay.", e);
 		} finally {
 			//replay_file.delete();
 		}

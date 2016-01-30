@@ -6,8 +6,13 @@
 package dota2;
 
 import java.util.concurrent.LinkedBlockingQueue;
+import java.util.logging.Level;
+import java.util.logging.Logger;
+
+import dota2.game_info_sources.DemoGameInfoSource;
 
 public class Game {
+	private static Logger log = Logger.getLogger(Game.class.getName());
 	
 	private GameState state; // can be null for unknown
 	private GameInfo info; // can be null for unknown
@@ -41,8 +46,7 @@ public class Game {
 			try {
 				listener.onStateChange(prev, cur);
 			} catch(Exception e) {
-				System.err.println("Error notifying game listeners onStateChange");
-				e.printStackTrace();
+				log.log(Level.FINER, "Error notifying game listeners onStateChange", e);
 			}
 		}
 	}
@@ -52,8 +56,7 @@ public class Game {
 			try {
 				listener.onInfoChange(prev, cur);
 			} catch(Exception e) {
-				System.err.println("Error notifying game listeners onInfoChange");
-				e.printStackTrace();
+				log.log(Level.FINER, "Error notifying game listeners onInfoChange", e);
 			}
 		}
 	}
@@ -66,7 +69,6 @@ public class Game {
 	
 	public void updateGameInfo(GameInfo new_info) {
 		GameInfo prev = this.info;
-		System.out.println("New info! --");
 		this.info = new_info;
 		notifyGameListeners_onInfoChange(prev, new_info);
 	}
