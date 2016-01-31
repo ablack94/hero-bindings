@@ -37,8 +37,7 @@ public class VConsoleGameStateSource extends GameStateSource implements VConsole
 		try {
 			this.console.send(ConsolePacket.buildCommand("status")).waitOn();
 		} catch (IllegalStateException | InterruptedException e) {
-			// TODO Auto-generated catch block
-			e.printStackTrace();
+			log.log(Level.WARNING, "Unexpected exception, might be a bug, application may behave in unexpected ways.", e);
 		}
 
 	}

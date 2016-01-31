@@ -11,8 +11,13 @@ import java.util.Map;
 import java.util.Properties;
 import java.util.Scanner;
 import java.util.concurrent.Semaphore;
+import java.util.logging.ConsoleHandler;
+import java.util.logging.FileHandler;
+import java.util.logging.Formatter;
+import java.util.logging.Handler;
 import java.util.logging.Level;
 import java.util.logging.LogManager;
+import java.util.logging.LogRecord;
 import java.util.logging.Logger;
 
 import net.minidev.json.JSONObject;
@@ -100,6 +105,7 @@ public class HBV1 implements GameListener, VConsoleListener {
 		this.dota2_path = _dota_path;
 		
 		log.info("===================================================");
+		log.info("======= Hero Bindings Load Successful! ============");
 		log.info("Monitoring player with steamID: " + this.this_steam_id);
 		log.info("Dota2 path: '" + this.dota2_path + "'");
 		log.info("===================================================");
@@ -142,6 +148,7 @@ public class HBV1 implements GameListener, VConsoleListener {
 	}
 	
 	public void begin() throws InterruptedException, IllegalStateException, IOException {
+		log.info("Trying to connect to dota 2...");
 		console.removeListener(this);
 		while(console.connect() == false) {
 			Thread.sleep(5000);
@@ -152,6 +159,7 @@ public class HBV1 implements GameListener, VConsoleListener {
 			Thread.sleep(5000);
 		}
 		console.addListener(this);
+		log.info("Connected to Dota 2");
 		
 		prev_this_player = Player.fromSteamID(this_steam_id);
 		cur_this_player = Player.fromSteamID(this_steam_id);
@@ -252,7 +260,7 @@ public class HBV1 implements GameListener, VConsoleListener {
 	
 	public static void main(String[] argv) throws Exception {
 		// Setup logging
-		LogManager.getLogManager().readConfiguration(HBV1.class.getResourceAsStream("resources/logcfg.properties"));
+		LogManager.getLogManager().readConfiguration(HBV1.class.getResourceAsStream("resources/logcfg2.properties"));
 		
 		boolean run = true;
 		// Make a home for us if we don't already have one
@@ -261,6 +269,20 @@ public class HBV1 implements GameListener, VConsoleListener {
 		if(dir.exists() == false) {
 			dir.mkdir();
 		}
+		
+		// Setup rolling high-detail file logging for error reporting
+		Handler handler = new FileHandler(new File(dir, "hb.log").getAbsolutePath(), 10000000, 10); // 10 rolling files max of 10MB each
+		handler.setLevel(Level.ALL);
+		Logger.getLogger("").addHandler(handler);
+		// Setup friendly console logging
+		Handler con_handler = new ConsoleHandler();
+		con_handler.setFormatter(new Formatter() {
+			public String format(LogRecord rec) {
+				return rec.getLevel() + " : " + rec.getMessage() + "\n";
+			}
+		});
+		con_handler.setLevel(Level.INFO);
+		Logger.getLogger("").addHandler(con_handler);
 		
 		// Determine config file path to use
 		String config_file = "config.json";
