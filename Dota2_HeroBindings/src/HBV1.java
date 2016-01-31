@@ -10,6 +10,7 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.Properties;
 import java.util.Scanner;
+import java.util.concurrent.Semaphore;
 import java.util.logging.Level;
 import java.util.logging.LogManager;
 import java.util.logging.Logger;
@@ -19,30 +20,37 @@ import net.minidev.json.JSONValue;
 import net.minidev.json.parser.ParseException;
 import vconsole2.ConsolePacket;
 import vconsole2.VConsole2;
+import vconsole2.VConsoleListener;
 import dota2.Game;
 import dota2.GameInfo;
 import dota2.GameInfoSource;
 import dota2.GameListener;
 import dota2.GameState;
+import dota2.GameStateSource;
 import dota2.Hero;
 import dota2.Player;
 import dota2.game_info_sources.DemoGameInfoSource;
 import dota2.game_state_sources.VConsoleGameStateSource;
 
 
-public class HBV1 implements GameListener {
+public class HBV1 implements GameListener, VConsoleListener {
 	private static Logger log = Logger.getLogger(HBV1.class.getName());
 	
-	private GameInfoSource gi_src;
 	VConsole2 console;
 	long this_steam_id;
 	String dota2_path;
-	Player cur_this_player;
-	Player prev_this_player;
 	Map<Hero, String> hero_config_map;
 	String default_config = "HB_default.cfg";
 	
 	String dota2_cfg_path;
+	
+	Semaphore reconnect_flag;
+	
+	Player cur_this_player;
+	Player prev_this_player;
+	Game game;
+	GameStateSource gs;
+	GameInfoSource gi;
 	
 	public HBV1(String root_dir, String config_file) throws InterruptedException, IllegalStateException, IOException {
 		// Open the config file and read the data to a JSONObject
@@ -74,7 +82,7 @@ public class HBV1 implements GameListener {
 			log.severe("dota path must be a string!");
 			return;
 		}
-		// Check
+		// Check configuration
 		if(_steam_id == -1) {
 			log.severe("Invalid/Missing SteamID. Terminating.");
 			return;
@@ -97,10 +105,18 @@ public class HBV1 implements GameListener {
 		log.info("===================================================");
 		
 		this.dota2_cfg_path = new File(this.dota2_path, "game\\dota\\cfg").getAbsolutePath();
+
+		this.reconnect_flag = new Semaphore(0);
 		
-		prev_this_player = Player.fromSteamID(this_steam_id);
-		cur_this_player = Player.fromSteamID(this_steam_id);
+		console = new VConsole2();
+		console.addListener(this);
+		do {
+			begin();
+			reconnect_flag.acquire();
+			reset();
+		} while(true);
 		
+		/*
 		console = new VConsole2();
 		log.info("Trying to connect to dota 2...");
 		while(console.connect() == false) {
@@ -120,8 +136,56 @@ public class HBV1 implements GameListener {
 		gi_src = new DemoGameInfoSource(console, new File(this.dota2_path, "game\\dota").getAbsolutePath());
 		Game game = new Game(gs_src, gi_src);
 		game.addGameListener(this);
+		*/
 		
-		while(true);
+
+	}
+	
+	public void begin() throws InterruptedException, IllegalStateException, IOException {
+		console.removeListener(this);
+		while(console.connect() == false) {
+			Thread.sleep(5000);
+		}
+		console.send(ConsolePacket.buildCommand("clear")).waitOn();
+		console.disconnect();
+		while(console.connect() == false) {
+			Thread.sleep(5000);
+		}
+		console.addListener(this);
+		
+		prev_this_player = Player.fromSteamID(this_steam_id);
+		cur_this_player = Player.fromSteamID(this_steam_id);
+		
+		gs = new VConsoleGameStateSource(console);
+		gi = new DemoGameInfoSource(console, new File(dota2_path, "game\\dota").getAbsolutePath());
+		
+		game = new Game(gs, gi);
+		game.addGameListener(this);
+	}
+	
+	public void reset() throws InterruptedException, IllegalStateException, IOException {
+		if(gs != null) {
+			gs.unbind();
+		}
+		if(gi != null) {
+			gi.unbind();
+		}
+	}
+	
+	@Override
+	public void onPacketReceived(ConsolePacket packet) {
+	
+	}
+	
+	@Override
+	public void onConnected() {
+		
+	}
+	
+	@Override
+	public void onDisconnect() {
+		log.log(Level.INFO, "Connection lost, restarting...");
+		reconnect_flag.release();
 	}
 	
 	@Override
@@ -134,7 +198,7 @@ public class HBV1 implements GameListener {
 			log.fine("Updating game info...");
 			new Thread(new Runnable() {
 				public void run() {
-					gi_src.updateGameInfo();
+					gi.updateGameInfo();
 				}
 			}).start();
 		}
@@ -151,14 +215,20 @@ public class HBV1 implements GameListener {
 				if(cur_this_player.getCurrentHero() != prev_this_player.getCurrentHero()) {
 					log.info("Assigned hero: " + cur_this_player.getCurrentHero());
 					//String c = hero_config_map.getOrDefault(cur_this_player.getCurrentHero(), default_config);
-					String c = "hb_" + cur_this_player.getCurrentHero().getName();
-					if(new File(this.dota2_cfg_path, c).exists() == false) {
-						log.info("No hero-specific bindings for " + cur_this_player.getCurrentHero().getName() + " loading default...");
-						loadConfig("hb_default.cfg");
+					String c = "hb_" + cur_this_player.getCurrentHero().getName() + ".cfg";
+					File hspecific = new File(this.dota2_cfg_path, c);
+					if(hspecific.exists() == false || (hspecific.exists() == true && hspecific.length() == 0)) {
+						if(hspecific.exists()) {
+							log.info(String.format("Hero specific binding for %s exists, but it appears to be empty, loading default config.", cur_this_player.getCurrentHero().getName()));
+						} else {
+							log.info(String.format("No hero specific binding for %s exists, loading default config.", cur_this_player.getCurrentHero().getName()));
+						}
 						// Alert the user of hb_default.cfg can't be found
 						if(new File(this.dota2_cfg_path, "hb_default.cfg").exists() == false) {
 							log.warning("Default bindings file doesn't exist! Gameplay may be affected. Make sure hb_default.cfg exists in your cfg directory!");
-						}
+						}						
+						loadConfig("hb_default.cfg");
+
 					} else {
 						log.info("Loading configuration '" + c + "' for hero " + cur_this_player.getCurrentHero().getName());
 						loadConfig(c);
@@ -174,6 +244,7 @@ public class HBV1 implements GameListener {
 	private void loadConfig(String config) {
 		try {
 			console.send(ConsolePacket.buildCommand("exec " + config)).waitOn();
+			log.log(Level.INFO, "Configuration loaded!");
 		} catch (IllegalStateException | InterruptedException e) {
 			log.log(Level.SEVERE, "Error sending load configuration command... might need to restart the application.", e);
 		}

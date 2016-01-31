@@ -8,6 +8,8 @@ import java.net.Socket;
 import java.net.UnknownHostException;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
+import java.util.Timer;
+import java.util.TimerTask;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.locks.ReentrantLock;
@@ -43,6 +45,15 @@ public class VConsole2 {
 				});
 				thread_read.start();
 				thread_write.start();
+				
+				TimerTask _heartbeat = new TimerTask() {
+					public void run() {
+						run_heartbeat();
+					}
+				};
+				timer_heartbeat = new Timer(true); // daemon thread
+				timer_heartbeat.scheduleAtFixedRate(_heartbeat, 0, 5*1000);
+				
 				setState(new ConnectedState());
 			} catch(IOException e) {
 				if(conn != null) {
@@ -83,6 +94,8 @@ public class VConsole2 {
 		public void disconnect() throws IllegalStateException, IOException {
 			log.fine("Disconnecting");
 			try {
+				_input.close();
+				_output.close();
 				conn.close();
 			} catch(IOException e) {
 				log.log(Level.WARNING, "Problem closing socket.", e);
@@ -91,8 +104,12 @@ public class VConsole2 {
 				_input = null;
 				_output = null;
 			}
+			timer_heartbeat.cancel();
+			timer_heartbeat = null;
+			
 			thread_read.interrupt();
 			thread_write.interrupt();
+			
 			try {
 				if(Thread.currentThread() != thread_read && Thread.currentThread() != thread_write) {
 					Thread.sleep(5000);
@@ -131,13 +148,14 @@ public class VConsole2 {
 	private ReentrantLock state_lock;
 	private int timeout; // ms
 	private int port;
-	private Socket conn;
+	private volatile Socket conn;
 	private Thread thread_read;
 	private Thread thread_write;
+	private Timer timer_heartbeat; // dota doesn't close the socket on exit for some reason, so we need to ping it periodically
 	private ReentrantLock write_lock;
 	
-	private InputStream _input;
-	private OutputStream _output;
+	private volatile InputStream _input;
+	private volatile OutputStream _output;
 	
 	private LinkedBlockingQueue<VConsoleListener> listeners;
 	private LinkedBlockingQueue<ConsolePacket> read_queue;
@@ -159,6 +177,7 @@ public class VConsole2 {
 		this.conn = null;
 		this.thread_read = null;
 		this.thread_write = null;
+		this.timer_heartbeat = null;
 		this.listeners = new LinkedBlockingQueue<VConsoleListener>();
 		this.read_queue = new LinkedBlockingQueue<ConsolePacket>();
 		this.write_queue = new LinkedBlockingQueue<PacketToWrite>();
@@ -254,26 +273,40 @@ public class VConsole2 {
 	}
 	
 	private void run_write() {
+		boolean closing = false;
 		PacketToWrite temp = null;
-		while(Thread.interrupted() == false) {
+		while(Thread.interrupted() == false && closing == false) {
 			try {
 				temp = write_queue.take();
 				_output.write(temp.getPacket().serialize());
 				_output.flush();
 				temp.getResult().complete();
 			} catch(InterruptedException e) {
+				closing = true;
 				break;
 			} catch(IOException e) {
 				if(temp != null) {
 					temp.getResult().setSuccess(false);
 				}
-			} finally {
+				if(Thread.interrupted() == true) {
+					closing = true;
+				}
+				break;
+			} catch(NullPointerException e) {
+				if(Thread.interrupted() == true) {
+					closing = true;
+				}
+				break;
+			}
+			finally {
 				temp = null;
 			}
 		}
 		
 		try {
-			disconnect();
+			if(closing == false) {
+				disconnect();
+			}
 		} catch(Exception e) {
 			// Don't need to do anything, don't care really
 		}
@@ -293,8 +326,17 @@ public class VConsole2 {
 			try {
 				for(int i=0;i<12;i+=_input.read(header_buf));
 			} catch (IOException e) {
+				//log.log(Level.FINEST, "Read thread IOException",e);
 				if(Thread.interrupted() == false) {
 					log.log(Level.WARNING, "Error reading header!", e);
+				} else {
+					closing = true;
+				}
+				break;
+			} catch (NullPointerException e) {
+				//log.log(Level.FINEST, "Null pointer exception in read", e);
+				if(Thread.interrupted() == false) {
+					log.log(Level.WARNING, "Unexpected null pointer while reading header!", e);
 				} else {
 					closing = true;
 				}
@@ -311,7 +353,18 @@ public class VConsole2 {
 			try {
 				for(int i=0;i<payload_length;i+=_input.read(payload_buf));
 			} catch(IOException e) {
-				log.log(Level.WARNING, "Error reading payload!", e);
+				if(Thread.interrupted() == false) {
+					log.log(Level.WARNING, "Error reading payload!", e);
+				} else {
+					closing = true;
+				}
+				break;
+			} catch (NullPointerException e) {
+				if(Thread.interrupted() == false) {
+					log.log(Level.WARNING, "Unexpected null pointer reading payload!", e);
+				} else {
+					closing = true;
+				}
 				break;
 			}
 			// Build packet
@@ -328,6 +381,16 @@ public class VConsole2 {
 			// Don't need to do anything, don't care really
 		}
 		log.log(Level.FINEST, "Read thread terminated.");
+	}
+	
+	public void run_heartbeat() {
+		try {
+			log.finest("nop");
+			send(ConsolePacket.buildCommand(" ")); // nop command
+		} catch(Exception e) {
+			log.log(Level.FINEST, "Exception in heartbeat thread", e);
+			// Any exceptions don't matter since the read/write threads handle the connected/disconnected state
+		}
 	}
 	
 	private class PacketToWrite {

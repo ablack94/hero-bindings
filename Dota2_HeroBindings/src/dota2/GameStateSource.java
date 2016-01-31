@@ -15,4 +15,6 @@ public abstract class GameStateSource {
 	public GameStateSource() {
 		this.ref = null;
 	}
+	
+	public abstract void unbind();
 }

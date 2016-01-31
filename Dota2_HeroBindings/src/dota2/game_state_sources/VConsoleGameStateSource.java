@@ -44,6 +44,11 @@ public class VConsoleGameStateSource extends GameStateSource implements VConsole
 	}
 
 	@Override
+	public void unbind() {
+		this.console.removeListener(this);
+	}
+	
+	@Override
 	public void onPacketReceived(ConsolePacket packet) {
 		String data = new String(packet.getPayload(), StandardCharsets.UTF_8);
 		m = null;

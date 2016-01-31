@@ -13,5 +13,6 @@ public abstract class GameInfoSource {
 	}
 	
 	public abstract void updateGameInfo();
+	public abstract void unbind();
 	
 }

@@ -73,6 +73,11 @@ public class DemoGameInfoSource extends GameInfoSource implements VConsoleListen
 	}
 	
 	@Override
+	public void unbind() {
+		this.console.removeListener(this);
+	}
+	
+	@Override
 	public void updateGameInfo() {
 		// Delete the replay file if it exists
 		File replay_file = new File(replay_dir, DEMO_NAME + ".dem");
